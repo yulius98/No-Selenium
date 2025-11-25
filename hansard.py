@@ -20,6 +20,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
+from colorama import init, Fore, Back, Style
+from dataclasses import dataclass
 from colorama import Fore, Back, Style, init
 
 # Initialize colorama for Windows
@@ -198,8 +200,9 @@ class XMLParser:
             "name": level1_name,
             "level": 1,
             "path": level1_name,
-            "text": "",
-            "has_children": True
+            "text": "",  # Level 1 should have empty text
+            "has_children": True,
+            "uid": None  # Level 1 has no UID
         })
         logger.info(f"📄 Level 1 created: {Fore.YELLOW}{level1_name}{Style.RESET_ALL}")
         
@@ -213,7 +216,6 @@ class XMLParser:
             )
         
         XMLParser._log_branch_summary(branches)
-        logger.info(f"Total {len(fragment_uids)} fragment UIDs stored")
         
         return branches, fragment_uids
     
@@ -267,29 +269,26 @@ class XMLParser:
         # Get all topics at this proceeding level
         topics = proceeding.find_all('topic', recursive=False)
         
-        # Only create level 2 if there are topics
-        if not topics:
-            return
+        # Always create level 2 even if there are no topics
+        has_children = len(topics) > 0
         
         # Check if this level2_path already exists
-        existing_branch = None
-        for branch in branches:
-            if branch.get('level') == 2 and branch.get('path') == level2_path:
-                existing_branch = branch
-                break
+        # Remove the deduplication to allow duplicate Level 2 branches with the same path
+        # existing_branch = None
+        # for branch in branches:
+        #     if branch.get('level') == 2 and branch.get('path') == level2_path:
+        #         existing_branch = branch
+        #         break
         
-        # If doesn't exist, create it
-        if not existing_branch:
-            branches.append({
-                "name": level2_name,
-                "level": 2,
-                "path": level2_path,
-                "text": "",
-                "has_children": True
-            })
-        else:
-            # Update has_children
-            existing_branch["has_children"] = True
+        # Always append a new Level 2 branch for each proceeding (allow duplicates)
+        branches.append({
+            "name": level2_name,
+            "level": 2,
+            "path": level2_path,
+            "text": "",  # Level 2 should have empty text
+            "has_children": has_children,
+            "uid": None  # Level 2 has no UID
+        })
         
         # Parse all topics (Level 3) immediately after creating level 2
         for topic in topics:
@@ -319,6 +318,8 @@ class XMLParser:
         # Store fragment UID using the full path as key
         if topic_uid:
             fragment_uids[level3_path] = topic_uid
+            # Log UID information
+            logger.info(f"🔗 UID found for: {Fore.CYAN}{level3_name}{Style.RESET_ALL} → {Fore.YELLOW}{topic_uid}{Style.RESET_ALL}")
         
         # Check for children
         subproceedings = topic.find_all('subproceeding', recursive=False)
@@ -341,8 +342,9 @@ class XMLParser:
                 "name": level3_name,
                 "level": 3,
                 "path": level3_path,
-                "text": "",
-                "has_children": has_children
+                "text": "",  # Level 3 will get content later from ContentMerger
+                "has_children": has_children,
+                "uid": topic_uid  # Store the UID for Level 3
             })
             
             # Parse subproceedings (Level 4) only for new topics
@@ -389,8 +391,9 @@ class XMLParser:
             "name": level4_name,
             "level": 4,
             "path": level4_path,
-            "text": "",
-            "has_children": len(sub_speeches) > 0
+            "text": "",  # Level 4 should have empty text
+            "has_children": len(sub_speeches) > 0,
+            "uid": None  # Level 4 has no UID
         })
         
         # Parse speakers (Level 5)
@@ -427,8 +430,9 @@ class XMLParser:
                 "name": full_name,
                 "level": level,
                 "path": speaker_path,
-                "text": "",
-                "has_children": False
+                "text": "",  # Speaker level (5) should have empty text
+                "has_children": False,
+                "uid": None  # Level 5 has no UID
             })
     
     @staticmethod
@@ -443,6 +447,27 @@ class XMLParser:
             if count > 0:
                 icon = level_icons.get(level, '•')
                 print(f"{Fore.CYAN}   {icon} Level {level}:{Style.RESET_ALL} {Fore.YELLOW}{count}{Style.RESET_ALL} items")
+    
+    @staticmethod
+    def _log_uid_summary(branches: List[Dict[str, Any]], fragment_uids: Dict[str, str]) -> None:
+        """Log summary of UIDs found in the data."""
+        print(f"\n{Fore.MAGENTA}🔗 UID Summary:{Style.RESET_ALL}")
+        
+        # Count branches with UIDs
+        branches_with_uid = [b for b in branches if b.get('uid')]
+        print(f"{Fore.GREEN}   Branches with UID: {len(branches_with_uid)}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}   Total Fragment UIDs: {len(fragment_uids)}{Style.RESET_ALL}")
+        
+        # Display each UID
+        for branch in branches_with_uid:
+            uid = branch.get('uid')
+            name = branch.get('name', 'Unknown')
+            level = branch.get('level', 0)
+            print(f"{Fore.CYAN}   📎 Level {level}:{Style.RESET_ALL} {Fore.WHITE}{name[:50]}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}      UID: {uid}{Style.RESET_ALL}")
+        
+        if not branches_with_uid:
+            print(f"{Fore.YELLOW}   No UIDs found in branches{Style.RESET_ALL}")
     
     @staticmethod
     def parse_fragment_content(xml_text: str) -> Dict[str, str]:
@@ -470,13 +495,52 @@ class XMLParser:
         if not body:
             return {}
         
-        # Parse all paragraphs
+        # Extract complete content from the entire fragment
+        if bill_name:
+            # Get all text content from the fragment
+            complete_content = XMLParser._extract_complete_fragment_text(body)
+            if complete_content:
+                content_map[bill_name] = complete_content
+        
+        # Parse all paragraphs for detailed content mapping
         all_paragraphs = body.find_all('p')
         XMLParser._parse_paragraphs(
             all_paragraphs, bill_name, content_map
         )
         
         return content_map
+    
+    @staticmethod
+    def _extract_complete_fragment_text(body) -> str:
+        """Extract complete text from the entire fragment body."""
+        all_content = []
+        
+        # Get all paragraphs in order
+        paragraphs = body.find_all('p')
+        
+        for p in paragraphs:
+            p_class = p.get('class', [])
+            if isinstance(p_class, list):
+                p_class = ' '.join(p_class)
+            
+            p_text = p.get_text(separator=' ', strip=True)
+            if p_text:
+                # Format headers nicely
+                if any(header_class in p_class for header_class in ['SubDebate-H', 'SubSubDebate-H']):
+                    all_content.append(f"\n{p_text}\n")
+                elif p.find('span', class_='MemberSpeech-H'):
+                    # Extract speaker name and format it
+                    speaker_span = p.find('span', class_='MemberSpeech-H')
+                    speaker_name = speaker_span.get_text(strip=True)
+                    all_content.append(f"\n{speaker_name}\n")
+                    # Add any additional text in the paragraph
+                    remaining_text = p_text.replace(speaker_name, '').strip()
+                    if remaining_text:
+                        all_content.append(remaining_text)
+                else:
+                    all_content.append(p_text)
+        
+        return '\n\n'.join(filter(None, all_content))
     
     @staticmethod
     def _extract_bill_name(soup: BeautifulSoup) -> Optional[str]:
@@ -506,6 +570,8 @@ class XMLParser:
         content_map: Dict[str, str]
     ) -> None:
         """Parse paragraphs and build content map."""
+        # Collect all text for the main topic (Level 3)
+        all_topic_text = []
         current_topic = None
         current_subproc = None
         current_speaker = None
@@ -519,6 +585,10 @@ class XMLParser:
                 p_class = ' '.join(p_class)
             
             p_text = p.get_text(separator=' ', strip=True)
+            
+            # Add all text to main topic collection
+            if p_text:
+                all_topic_text.append(p_text)
             
             # Detect topic header
             if 'SubDebate-H' in p_class:
@@ -574,6 +644,10 @@ class XMLParser:
         XMLParser._save_topic(
             current_topic, topic_texts, bill_name, content_map
         )
+        
+        # Save complete topic content using bill name as key (for Level 3 matching)
+        if bill_name and all_topic_text:
+            content_map[bill_name] = '\n\n'.join(all_topic_text)
     
     @staticmethod
     def _save_topic(
@@ -633,7 +707,7 @@ class ContentMerger:
         content_map: Dict[str, str]
     ) -> List[Dict[str, Any]]:
         """
-        Merge text content from content_map into branches using path matching.
+        Merge text content from content_map into branches using UID and path matching.
         
         Args:
             branches: List of tree branch dictionaries
@@ -646,10 +720,24 @@ class ContentMerger:
         logger.info(f"Processing {Fore.CYAN}{len(branches)}{Style.RESET_ALL} branches")
         logger.info(f"Content map: {Fore.CYAN}{len(content_map)}{Style.RESET_ALL} entries")
         
+        # Extract UID mappings if available
+        uid_mappings = content_map.get('_uid_mappings', {})
+        
         matched = 0
+        uid_matches = 0
+        fallback_matches = 0
+        
         for branch in branches:
-            if ContentMerger._match_content(branch, content_map):
-                matched += 1
+            if branch['level'] == 3:  # Only process Level 3 branches
+                uid = branch.get('uid')
+                name = branch.get('name', '')
+                
+                if ContentMerger._match_content(branch, content_map, uid_mappings):
+                    matched += 1
+                    if uid and uid_mappings and uid in uid_mappings:
+                        uid_matches += 1
+                    else:
+                        fallback_matches += 1
         
         with_text = sum(1 for b in branches if b.get('text'))
         print(f"{Fore.GREEN}✓ Merge complete:{Style.RESET_ALL} {Fore.YELLOW}{matched}{Style.RESET_ALL} matches, {Fore.YELLOW}{with_text}{Style.RESET_ALL} branches with text")
@@ -657,9 +745,10 @@ class ContentMerger:
         return branches
     
     @staticmethod
-    def _match_content(branch: Dict[str, Any], content_map: Dict[str, str]) -> bool:
+    def _match_content(branch: Dict[str, Any], content_map: Dict[str, str], uid_mappings: Dict[str, str] = None) -> bool:
         """
         Try to match and assign content to a branch.
+        Only Level 3 branches will get text content.
         
         Returns:
             True if content was matched and assigned
@@ -667,71 +756,161 @@ class ContentMerger:
         name = branch['name']
         path = branch.get('path', '')
         level = branch['level']
+        uid = branch.get('uid')
         
-        # Strategy 1: Exact path match (highest priority)
+        # Only Level 3 branches should have text content
+        # Levels 1, 2, 4, and 5 should have empty text
+        if level != 3:
+            branch['text'] = ""
+            return False
+        
+        # Strategy 1: Direct UID match (ABSOLUTE HIGHEST PRIORITY)
+        # If UID exists and has content, use it exclusively - no fallback to other strategies
+        if uid and uid_mappings and uid in uid_mappings:
+            content = uid_mappings[uid]
+            if content and len(content.strip()) > 0:
+                branch['text'] = content
+                return True
+        
+        # Strategy 2: Exact path match (only if no UID or UID failed)
         if path in content_map:
-            branch['text'] = content_map[path]
-            return True
+            content = content_map[path]
+            if content and len(content.strip()) > 0:
+                branch['text'] = content
+                return True
         
-        # Strategy 2: Exact name match
+        # Strategy 3: Exact name match (only if no UID or UID failed)
         if name in content_map:
-            branch['text'] = content_map[name]
-            return True
+            content = content_map[name]
+            if content and len(content.strip()) > 0:
+                branch['text'] = content
+                return True
         
-        # Strategy 3: Path-based matching
+        # Strategy 4: Construct bill content for bills (only if no UID or UID failed)
+        if 'Bill 2025' in name:
+            complete_content = ContentMerger._construct_bill_content(name, content_map, path, uid_mappings, exclude_uid=uid)
+            if complete_content and len(complete_content.strip()) > 0:
+                branch['text'] = complete_content
+                return True
+        
+        # Strategy 5: Path-based matching for Level 3
         if path:
             path_parts = [p.strip() for p in path.split(' > ')]
-            
-            # Level 3: Bills, main topics
-            if level == 3 and len(path_parts) >= 3:
+            if len(path_parts) >= 3:
                 topic_name = path_parts[2]
                 if topic_name in content_map:
-                    branch['text'] = content_map[topic_name]
-                    return True
-            
-            # Level 4: Subproceedings, sections
-            if level == 4 and len(path_parts) >= 4:
-                topic_name = path_parts[2]
-                section_name = path_parts[3]
-                
-                patterns = [
-                    f"{topic_name} > {section_name}",
-                    section_name,
-                ]
-                
-                for pattern in patterns:
-                    if pattern in content_map:
-                        branch['text'] = content_map[pattern]
-                        return True
-            
-            # Level 5: Speakers
-            if level == 5 and len(path_parts) >= 5:
-                topic_name = path_parts[2]
-                section_name = path_parts[3]
-                speaker_name = path_parts[4]
-                
-                patterns = [
-                    f"{topic_name} > {section_name} > {speaker_name}",
-                    f"{section_name} > {speaker_name}",
-                    speaker_name,
-                ]
-                
-                for pattern in patterns:
-                    if pattern in content_map:
-                        branch['text'] = content_map[pattern]
-                        return True
-            
-            # Fallback: fuzzy matching
-            last_name = path_parts[-1] if path_parts else name
-            if len(last_name) > 10:
-                for content_key in content_map.keys():
-                    if last_name.lower() in content_key.lower():
-                        branch['text'] = content_map[content_key]
+                    content = content_map[topic_name]
+                    if content and len(content.strip()) > 0:
+                        branch['text'] = content
                         return True
         
-        # No match found
+        # Strategy 6: Try partial matching for complex names
+        if name and len(name) > 20:
+            best_match = None
+            best_score = 0
+            
+            for content_key, content_text in content_map.items():
+                if content_key == '_uid_mappings':  # Skip the special UID mappings key
+                    continue
+                    
+                score = 0
+                # Exact match
+                if content_key == name:
+                    score = 100
+                # Partial matches
+                elif name.lower() in content_key.lower():
+                    score = 80
+                elif content_key.lower() in name.lower():
+                    score = 70
+                # Content quality indicators
+                if content_text and len(content_text) > 1000:
+                    score += 10
+                if name in content_text:
+                    score += 15
+                
+                if score > best_score and content_text and len(content_text.strip()) > 0:
+                    best_score = score
+                    best_match = content_text
+            
+            if best_match and best_score > 50:  # Minimum threshold
+                branch['text'] = best_match
+                return True
+        
+        # No match found for Level 3
         branch['text'] = ""
         return False
+    
+    @staticmethod
+    def _construct_bill_content(bill_name: str, content_map: Dict[str, str], bill_path: str, uid_mappings: Dict[str, str] = None, exclude_uid: str = None) -> str:
+        """
+        Construct complete bill content by finding the best matching content from the API fragments.
+        Uses UID mappings first, then falls back to flexible matching based on bill name and path.
+        
+        Args:
+            exclude_uid: UID to exclude from consideration to prevent conflicts with direct UID matching
+        """
+        # Constructing bill content with UID exclusion
+        
+        # Find the best matching content using flexible matching
+        best_content = None
+        best_score = 0
+        
+        # Check all content sources
+        all_content = dict(content_map)  # Copy to avoid modifying original
+        if uid_mappings:
+            # Add UID mappings but exclude the specific UID to prevent conflicts
+            for uid_key, uid_content in uid_mappings.items():
+                if exclude_uid and uid_key == exclude_uid:
+                    continue
+                all_content[uid_key] = uid_content
+        
+        for content_key, content_text in all_content.items():
+            if content_key == '_uid_mappings':  # Skip the special UID mappings key
+                continue
+            if exclude_uid and content_key == exclude_uid:  # Skip excluded UID
+                continue
+                
+            if not content_text or len(content_text.strip()) == 0:
+                continue
+                
+            score = 0
+            
+            # Score based on exact name match
+            if bill_name == content_key:
+                score += 100
+            
+            # Score based on partial name match
+            elif bill_name.lower() in content_key.lower():
+                score += 80
+            elif content_key.lower() in bill_name.lower():
+                score += 70
+            
+            # Score based on path match
+            elif bill_path and bill_path in content_key:
+                score += 60
+            
+            # Score based on content length (prefer more complete content)
+            if len(content_text) > 1000:
+                score += 10
+            
+            # Score based on content quality indicators
+            if "Second Reading Speech" in content_text:
+                score += 20
+            if bill_name in content_text:
+                score += 15
+            if "Bill 2025" in content_text:
+                score += 10
+            
+            # Select the highest scoring content
+            if score > best_score:
+                best_score = score
+                best_content = content_text
+                logger.info(f"  New best match: {content_key[:50]}... (score: {score})")
+        
+        # Return the best matching content or empty string if nothing found
+        result = best_content if best_content and best_score > 30 else ""
+        logger.info(f"  Final result: {len(result)} chars (score: {best_score})")
+        return result
 
 
 # ============================================
@@ -835,19 +1014,31 @@ class HansardScraper:
         
         url = f"{API_BASE_URL}/daily/tableofcontents/{doc_id}"
         
-        try:
-            response = self.session.get(url, timeout=self.timeout)
-            response.raise_for_status()
-            
-            logger.info(f"Response: {Fore.GREEN}✓ Success{Style.RESET_ALL} (Status: {response.status_code})")
-            
-            branches, fragment_uids = XMLParser.parse_table_of_contents(response.text)
-            
-            return branches, fragment_uids
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching TOC: {e}")
-            return [], {}
+        max_retries = 3
+        backoff_factor = 2
+        
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = self.session.get(url, timeout=self.timeout)
+                response.raise_for_status()
+                
+                logger.info(f"Response: {Fore.GREEN}✓ Success{Style.RESET_ALL} (Status: {response.status_code})")
+                
+                branches, fragment_uids = XMLParser.parse_table_of_contents(response.text)
+                
+                return branches, fragment_uids
+                
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error fetching TOC (Attempt {attempt}/{max_retries}): {e}")
+                if attempt < max_retries:
+                    wait_time = backoff_factor ** (attempt - 1)
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    import time
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Max retries reached. Failed to fetch Table of Contents for document ID: {doc_id}")
+        
+        return [], {}
     
     def fetch_all_fragments(self, fragment_uids: Dict[str, str]) -> Dict[str, str]:
         """
@@ -862,44 +1053,73 @@ class HansardScraper:
         print(f"\n{Fore.CYAN}📦 Fetching fragment contents...{Style.RESET_ALL}")
         print(f"{Fore.WHITE}   Total fragments: {Fore.CYAN}{len(fragment_uids)}{Style.RESET_ALL}\n")
         
+        max_retries = 3
+        backoff_factor = 2
+        
         all_content = {}
+        uid_to_content = {}  # Direct UID to content mapping
         successful = 0
         failed = 0
         total = len(fragment_uids)
         
         for topic_path, uid in fragment_uids.items():
-            try:
-                url = f"{API_BASE_URL}/daily/fragment/{uid}"
-                response = self.session.get(url, timeout=self.timeout)
-                response.raise_for_status()
-                
-                content_map = XMLParser.parse_fragment_content(response.text)
-                
-                # Store content using the full path as key
-                for content_key, content_text in content_map.items():
-                    # Use both the fragment key and path-based keys
-                    all_content[topic_path] = content_text
-                    all_content[content_key] = content_text
-                
-                successful += 1
-                
-                # Display topic name (last part of path)
-                display_name = topic_path.split(' > ')[-1] if ' > ' in topic_path else topic_path
-                print_progress(
-                    successful, 
-                    total, 
-                    display_name, 
-                    f"{len(content_map)} items"
-                )
-                
-            except Exception as e:
-                failed += 1
-                display_name = topic_path.split(' > ')[-1] if ' > ' in topic_path else topic_path
-                print(f"{Fore.RED}  ✗ Failed: {display_name[:50]}... - {e}{Style.RESET_ALL}")
-                continue
+            for attempt in range(1, max_retries + 1):
+                try:
+                    url = f"{API_BASE_URL}/daily/fragment/{uid}"
+                    response = self.session.get(url, timeout=self.timeout)
+                    response.raise_for_status()
+                    
+                    content_map = XMLParser.parse_fragment_content(response.text)
+                    
+                    # Log the fetched content for debugging
+                    logger.info(f"Fetched fragment UID {uid}: {len(content_map)} content items")
+                    
+                    # Store content using multiple keys for better matching
+                    for content_key, content_text in content_map.items():
+                        # Store with topic path as primary key
+                        all_content[topic_path] = content_text
+                        # Store with UID as key for direct matching
+                        uid_to_content[uid] = content_text
+                        # Store with content key for fallback matching
+                        all_content[content_key] = content_text
+                        
+                        # Also store with topic name only (last part of path)
+                        topic_name = topic_path.split(' > ')[-1] if ' > ' in topic_path else topic_path
+                        all_content[topic_name] = content_text
+                        
+                        logger.info(f"  Content stored for: {content_key} (Length: {len(content_text)} chars)")
+                    
+                    successful += 1
+                    
+                    # Display topic name (last part of path)
+                    display_name = topic_path.split(' > ')[-1] if ' > ' in topic_path else topic_path
+                    print_progress(
+                        successful, 
+                        total, 
+                        display_name, 
+                        f"{len(content_map)} items"
+                    )
+                    
+                    break  # Success, break retry loop
+                except Exception as e:
+                    if attempt < max_retries:
+                        wait_time = backoff_factor ** (attempt - 1)
+                        logger.error(f"Error fetching fragment UID {uid} (Attempt {attempt}/{max_retries}): {e}")
+                        logger.info(f"Retrying in {wait_time} seconds...")
+                        import time
+                        time.sleep(wait_time)
+                    else:
+                        failed += 1
+                        display_name = topic_path.split(' > ')[-1] if ' > ' in topic_path else topic_path
+                        print(f"{Fore.RED}  ✗ Failed: {display_name[:50]}... - {e}{Style.RESET_ALL}")
+                        break
         
         print(f"\n{Fore.GREEN}✓ Fetch complete:{Style.RESET_ALL} {Fore.YELLOW}{successful}{Style.RESET_ALL} successful, {Fore.RED}{failed}{Style.RESET_ALL} failed")
         logger.info(f"Total content items: {Fore.CYAN}{len(all_content)}{Style.RESET_ALL}")
+        logger.info(f"UID to content mappings: {Fore.CYAN}{len(uid_to_content)}{Style.RESET_ALL}")
+        
+        # Store UID mappings in all_content for use by ContentMerger
+        all_content['_uid_mappings'] = uid_to_content
         
         return all_content
     
@@ -994,5 +1214,171 @@ def main():
         traceback.print_exc()
 
 
+def update_uid_content(json_file_path: str, uid: str) -> None:
+    """
+    Update content for a specific UID by fetching directly from the fragment API.
+    
+    Args:
+        json_file_path: Path to the JSON file to update
+        uid: The UID to update
+    """
+    print_header(f"🔄 UPDATING UID CONTENT: {uid}", width=80)
+    
+    try:
+        # Load current JSON
+        with open(json_file_path, 'r') as f:
+            data = json.load(f)
+        
+        # Get content from fragment API
+        fragment_url = f'https://api.parliament.nsw.gov.au/api/hansard/search/daily/fragment/{uid}'
+        print(f"{Fore.CYAN}📡 Fetching content from API...{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}URL: {fragment_url}{Style.RESET_ALL}")
+        
+        response = requests.get(fragment_url)
+        
+        if response.status_code == 200:
+            print(f"{Fore.GREEN}✓ API response successful{Style.RESET_ALL}")
+            
+            soup = BeautifulSoup(response.text, 'xml')
+            
+            # Extract text content using the same method as the scraper
+            body = soup.find('body')
+            if body:
+                text_content = []
+                for p in body.find_all('p'):
+                    p_text = p.get_text(strip=True)
+                    if p_text:
+                        text_content.append(p_text)
+                
+                correct_text = '\n\n'.join(text_content)
+                
+                print(f"{Fore.GREEN}✓ Extracted {len(correct_text)} characters{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}Preview: {correct_text[:100]}...{Style.RESET_ALL}")
+                
+                # Find and update the branch with this UID
+                updated = False
+                for branch in data.get('tree_branches', []):
+                    if branch.get('uid') == uid:
+                        old_text = branch.get('text', '')
+                        branch['text'] = correct_text
+                        
+                        print(f"\n{Fore.GREEN}✓ Updated branch: {branch['name']}{Style.RESET_ALL}")
+                        print(f"{Fore.YELLOW}Old text length: {len(old_text)} chars{Style.RESET_ALL}")
+                        print(f"{Fore.CYAN}New text length: {len(correct_text)} chars{Style.RESET_ALL}")
+                        
+                        if old_text != correct_text:
+                            print(f"{Fore.GREEN}✓ Content changed - update needed{Style.RESET_ALL}")
+                        else:
+                            print(f"{Fore.YELLOW}ℹ Content identical - no changes needed{Style.RESET_ALL}")
+                        
+                        updated = True
+                        break
+                
+                if updated:
+                    # Save updated JSON
+                    with open(json_file_path, 'w') as f:
+                        json.dump(data, f, indent=2)
+                    print(f"\n{Fore.GREEN}✅ JSON file updated successfully!{Style.RESET_ALL}")
+                else:
+                    print(f"\n{Fore.RED}✗ UID {uid} not found in JSON file{Style.RESET_ALL}")
+            else:
+                print(f"{Fore.RED}✗ No body content found in API response{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.RED}✗ API request failed: HTTP {response.status_code}{Style.RESET_ALL}")
+            
+    except FileNotFoundError:
+        print(f"{Fore.RED}✗ JSON file not found: {json_file_path}{Style.RESET_ALL}")
+    except json.JSONDecodeError:
+        print(f"{Fore.RED}✗ Invalid JSON file: {json_file_path}{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{Fore.RED}✗ Error updating UID: {e}{Style.RESET_ALL}")
+
+
+def display_uids_from_json(json_file_path: str):
+    """
+    Load and display UIDs from an existing JSON file.
+    
+    Args:
+        json_file_path: Path to the JSON file containing Hansard data
+    """
+    print_header("🔍 UID ANALYSIS FROM JSON", width=80)
+    print_info("JSON File", json_file_path, indent=2)
+    
+    try:
+        with open(json_file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        print_subheader("📊 JSON Data Analysis", width=80)
+        
+        if 'tree_branches' in data:
+            branches = data['tree_branches']
+            print_info("Total Branches", len(branches), indent=2)
+            
+            # Analyze UIDs
+            branches_with_uid = []
+            branches_without_uid = []
+            
+            for branch in branches:
+                if branch.get('uid'):
+                    branches_with_uid.append(branch)
+                else:
+                    branches_without_uid.append(branch)
+            
+            print_info("Branches with UID", len(branches_with_uid), indent=2)
+            print_info("Branches without UID", len(branches_without_uid), indent=2)
+            
+            # Display all UIDs
+            if branches_with_uid:
+                print_subheader("🔗 UID Details", width=80)
+                
+                for i, branch in enumerate(branches_with_uid, 1):
+                    uid = branch.get('uid')
+                    name = branch.get('name', 'Unknown')
+                    level = branch.get('level', 0)
+                    path = branch.get('path', '')
+                    
+                    print(f"\n{Fore.CYAN}#{i} - Level {level} Branch:{Style.RESET_ALL}")
+                    print_info("Name", name, indent=4)
+                    print_info("UID", uid, indent=4)
+                    print_info("Path", path, indent=4)
+                    
+                    if len(name) > 50:
+                        print(f"{Fore.YELLOW}    📝 (Long name truncated for display){Style.RESET_ALL}")
+            
+            else:
+                print(f"\n{Fore.YELLOW}⚠️  No UIDs found in the JSON data{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}💡 This might be an older format. Run the scraper again to generate UIDs.{Style.RESET_ALL}")
+        
+        else:
+            print(f"{Fore.RED}✗ No 'tree_branches' found in JSON file{Style.RESET_ALL}")
+    
+    except FileNotFoundError:
+        logger.error(f"File not found: {json_file_path}")
+    except json.JSONDecodeError:
+        logger.error(f"Invalid JSON file: {json_file_path}")
+    except Exception as e:
+        logger.error(f"Error reading JSON file: {e}")
+
+
 if __name__ == "__main__":
-    main()
+    # Check if user wants to analyze existing JSON or update specific UID
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--analyze-json" and len(sys.argv) > 2:
+            display_uids_from_json(sys.argv[2])
+        elif sys.argv[1] == "--update-uid" and len(sys.argv) > 3:
+            update_uid_content(sys.argv[2], sys.argv[3])
+        elif sys.argv[1] == "--help":
+            print_header("🏛️  HANSARD NSW PARLIAMENT SCRAPER - HELP", width=80)
+            print(f"{Fore.CYAN}Usage:{Style.RESET_ALL}")
+            print(f"  {Fore.WHITE}python hansard.py{Style.RESET_ALL}                          - Run interactive scraper")
+            print(f"  {Fore.WHITE}python hansard.py --analyze-json <file>{Style.RESET_ALL}      - Analyze existing JSON file")
+            print(f"  {Fore.WHITE}python hansard.py --update-uid <file> <uid>{Style.RESET_ALL} - Update specific UID content")
+            print(f"  {Fore.WHITE}python hansard.py --help{Style.RESET_ALL}                    - Show this help message")
+            print(f"\n{Fore.CYAN}Examples:{Style.RESET_ALL}")
+            print(f"  {Fore.WHITE}python hansard.py --analyze-json hansard_scraped.json{Style.RESET_ALL}")
+            print(f"  {Fore.WHITE}python hansard.py --update-uid hansard_scraped.json HANSARD-1323879322-160369{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.RED}Unknown argument: {sys.argv[1]}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}Use --help for usage information{Style.RESET_ALL}")
+    else:
+        main()
