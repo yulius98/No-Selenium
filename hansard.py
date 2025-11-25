@@ -264,17 +264,34 @@ class XMLParser:
         level2_name = proceeding_name_elem.text.strip()
         level2_path = f"{level1_name} > {level2_name}"
         
+        # Get all topics at this proceeding level
         topics = proceeding.find_all('topic', recursive=False)
         
-        branches.append({
-            "name": level2_name,
-            "level": 2,
-            "path": level2_path,
-            "text": "",
-            "has_children": len(topics) > 0
-        })
+        # Only create level 2 if there are topics
+        if not topics:
+            return
         
-        # Parse topics (Level 3)
+        # Check if this level2_path already exists
+        existing_branch = None
+        for branch in branches:
+            if branch.get('level') == 2 and branch.get('path') == level2_path:
+                existing_branch = branch
+                break
+        
+        # If doesn't exist, create it
+        if not existing_branch:
+            branches.append({
+                "name": level2_name,
+                "level": 2,
+                "path": level2_path,
+                "text": "",
+                "has_children": True
+            })
+        else:
+            # Update has_children
+            existing_branch["has_children"] = True
+        
+        # Parse all topics (Level 3) immediately after creating level 2
         for topic in topics:
             XMLParser._parse_topic(topic, level2_path, branches, fragment_uids)
     
@@ -299,9 +316,9 @@ class XMLParser:
         level3_name = topic_text_elem.text.strip()
         level3_path = f"{level2_path} > {level3_name}"
         
-        # Store fragment UID
+        # Store fragment UID using the full path as key
         if topic_uid:
-            fragment_uids[level3_name] = topic_uid
+            fragment_uids[level3_path] = topic_uid
         
         # Check for children
         subproceedings = topic.find_all('subproceeding', recursive=False)
@@ -311,29 +328,42 @@ class XMLParser:
         
         has_children = any([subproceedings, speeches, questions, answers])
         
-        branches.append({
-            "name": level3_name,
-            "level": 3,
-            "path": level3_path,
-            "text": "",
-            "has_children": has_children
-        })
+        # Check if this level3_path already exists
+        existing_topic = None
+        for branch in branches:
+            if branch.get('level') == 3 and branch.get('path') == level3_path:
+                existing_topic = branch
+                break
         
-        # Parse subproceedings (Level 4)
-        for subproceeding in subproceedings:
-            XMLParser._parse_subproceeding(subproceeding, level3_path, branches)
-        
-        # Parse speeches directly under topic (Level 4)
-        for speech in speeches:
-            XMLParser._parse_speaker(speech, level3_path, 4, branches)
-        
-        # Parse questions (Level 4)
-        for question in questions:
-            XMLParser._parse_speaker(question, level3_path, 4, branches, prefix="Question: ")
-        
-        # Parse answers (Level 4)
-        for answer in answers:
-            XMLParser._parse_speaker(answer, level3_path, 4, branches, prefix="Answer: ")
+        # If doesn't exist, create it
+        if not existing_topic:
+            branches.append({
+                "name": level3_name,
+                "level": 3,
+                "path": level3_path,
+                "text": "",
+                "has_children": has_children
+            })
+            
+            # Parse subproceedings (Level 4) only for new topics
+            for subproceeding in subproceedings:
+                XMLParser._parse_subproceeding(subproceeding, level3_path, branches)
+            
+            # Parse speeches directly under topic (Level 4)
+            for speech in speeches:
+                XMLParser._parse_speaker(speech, level3_path, 4, branches)
+            
+            # Parse questions (Level 4)
+            for question in questions:
+                XMLParser._parse_speaker(question, level3_path, 4, branches, prefix="Question: ")
+            
+            # Parse answers (Level 4)
+            for answer in answers:
+                XMLParser._parse_speaker(answer, level3_path, 4, branches, prefix="Answer: ")
+        else:
+            # Update has_children if needed
+            if has_children:
+                existing_topic["has_children"] = True
     
     @staticmethod
     def _parse_subproceeding(
@@ -638,12 +668,17 @@ class ContentMerger:
         path = branch.get('path', '')
         level = branch['level']
         
-        # Strategy 1: Exact name match
+        # Strategy 1: Exact path match (highest priority)
+        if path in content_map:
+            branch['text'] = content_map[path]
+            return True
+        
+        # Strategy 2: Exact name match
         if name in content_map:
             branch['text'] = content_map[name]
             return True
         
-        # Strategy 2: Path-based matching
+        # Strategy 3: Path-based matching
         if path:
             path_parts = [p.strip() for p in path.split(' > ')]
             
@@ -819,7 +854,7 @@ class HansardScraper:
         Fetch content from multiple fragment UIDs.
         
         Args:
-            fragment_uids: Dictionary mapping topic names to fragment UIDs
+            fragment_uids: Dictionary mapping topic paths to fragment UIDs
             
         Returns:
             Dictionary mapping content keys to full text
@@ -832,26 +867,35 @@ class HansardScraper:
         failed = 0
         total = len(fragment_uids)
         
-        for topic_name, uid in fragment_uids.items():
+        for topic_path, uid in fragment_uids.items():
             try:
                 url = f"{API_BASE_URL}/daily/fragment/{uid}"
                 response = self.session.get(url, timeout=self.timeout)
                 response.raise_for_status()
                 
                 content_map = XMLParser.parse_fragment_content(response.text)
-                all_content.update(content_map)
+                
+                # Store content using the full path as key
+                for content_key, content_text in content_map.items():
+                    # Use both the fragment key and path-based keys
+                    all_content[topic_path] = content_text
+                    all_content[content_key] = content_text
+                
                 successful += 1
                 
+                # Display topic name (last part of path)
+                display_name = topic_path.split(' > ')[-1] if ' > ' in topic_path else topic_path
                 print_progress(
                     successful, 
                     total, 
-                    topic_name, 
+                    display_name, 
                     f"{len(content_map)} items"
                 )
                 
             except Exception as e:
                 failed += 1
-                print(f"{Fore.RED}  ✗ Failed: {topic_name[:50]}... - {e}{Style.RESET_ALL}")
+                display_name = topic_path.split(' > ')[-1] if ' > ' in topic_path else topic_path
+                print(f"{Fore.RED}  ✗ Failed: {display_name[:50]}... - {e}{Style.RESET_ALL}")
                 continue
         
         print(f"\n{Fore.GREEN}✓ Fetch complete:{Style.RESET_ALL} {Fore.YELLOW}{successful}{Style.RESET_ALL} successful, {Fore.RED}{failed}{Style.RESET_ALL} failed")
