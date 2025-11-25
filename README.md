@@ -11,6 +11,8 @@ A lightweight, efficient web scraper for extracting Hansard (parliamentary debat
 - **Clean Architecture**: Object-oriented design with reusable components
 - **Type-Safe**: Full type hints for better code quality
 - **Robust Error Handling**: Comprehensive logging and error management
+- **Colored Console Output**: Beautiful colored terminal output with emojis
+- **Progress Tracking**: Visual progress bars and status indicators
 
 ## 📋 Table of Contents
 
@@ -29,13 +31,13 @@ This scraper uses the NSW Parliament's official API instead of Selenium for seve
 
 ### Performance Advantages
 
-| Feature | API-Based | Selenium-Based |
-|---------|-----------|----------------|
-| Speed | ⚡ **Fast** (2-5 seconds) | 🐌 Slow (30-60 seconds) |
-| Memory Usage | 📉 **Low** (~50MB) | 📈 High (~500MB+) |
-| CPU Usage | 💚 **Minimal** | 🔴 Significant |
-| Reliability | ✅ **Very High** | ⚠️ Moderate |
-| Setup Complexity | 🟢 **Simple** | 🟡 Complex |
+| Feature          | API-Based                 | Selenium-Based           |
+|------------------|---------------------------|--------------------------|
+| Speed            | ⚡ **Fast** (2-5 seconds) | 🐌 Slow (30-60 seconds) |
+| Memory Usage     | 📉 **Low** (~50MB)        | 📈 High (~500MB+)       |
+| CPU Usage        | 💚 **Minimal**            | 🔴 Significant          |
+| Reliability      | ✅ **Very High**          | ⚠️ Moderate             |
+| Setup Complexity | 🟢 **Simple**             | 🟡 Complex              |
 
 ### Detailed Comparison
 
@@ -98,22 +100,17 @@ pip install -r requirements.txt
 Or manually install:
 
 ```bash
-pip install requests beautifulsoup4 lxml
+pip install requests beautifulsoup4 lxml colorama
 ```
 
-### Optional: Playwright (for browser preview)
 
-```bash
-pip install playwright
-playwright install chromium
-```
 
 ## ⚡ Quick Start
 
 ### Basic Usage
 
 ```python
-from hansard_refactored import HansardScraper
+from hansard import HansardScraper
 
 # Initialize scraper
 scraper = HansardScraper()
@@ -128,10 +125,10 @@ print(f"Scraped {len(result['tree_branches'])} tree branches")
 ### Command Line
 
 ```bash
-python hansard_refactored.py
+python hansard.py
 ```
 
-The script will scrape the default URL and save results to `hansard_scraped.json`.
+The script will prompt you to input a target URL and save results to `hansard_scraped.json`.
 
 ## 🔄 Application Flow
 
@@ -140,91 +137,91 @@ The script will scrape the default URL and save results to `hansard_scraped.json
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         USER INPUT                          │
-│                     (Hansard URL)                          │
+│                     (Hansard URL)                           │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              STEP 1: Extract Document IDs                   │
-│           (DocumentIDExtractor.extract_from_url)           │
+│           (DocumentIDExtractor.extract_from_url)            │
 │                                                             │
-│  Input:  URL with HANSARD-XXXXXX-XXXXXX                   │
-│  Output: ['HANSARD-1323879322-160369']                     │
+│  Input:  URL with HANSARD-XXXXXX-XXXXXX                     │
+│  Output: ['HANSARD-1323879322-160369']                      │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│         STEP 2: Fetch Table of Contents (TOC)              │
-│          (HansardScraper.fetch_table_of_contents)          │
+│         STEP 2: Fetch Table of Contents (TOC)               │
+│          (HansardScraper.fetch_table_of_contents)           │
 │                                                             │
-│  API: /daily/tableofcontents/{doc_id}                      │
-│  Returns: XML with hierarchical structure                  │
+│  API: /daily/tableofcontents/{doc_id}                       │
+│  Returns: XML with hierarchical structure                   │
 │                                                             │
 │  Process:                                                   │
-│  ├─ Parse XML metadata (date, house)                       │
-│  ├─ Extract proceedings → topics → speeches                │
-│  ├─ Build 5-level tree structure                           │
-│  └─ Collect fragment UIDs for content fetching             │
+│  ├─ Parse XML metadata (date, house)                        │
+│  ├─ Extract proceedings → topics → speeches                 │
+│  ├─ Build 5-level tree structure                            │
+│  └─ Collect fragment UIDs for content fetching              │
 │                                                             │
 │  Output:                                                    │
-│  ├─ branches: List of tree nodes (Levels 1-5)              │
-│  └─ fragment_uids: Dict {topic_name: uid}                  │
+│  ├─ branches: List of tree nodes (Levels 1-5)               │
+│  └─ fragment_uids: Dict {topic_name: uid}                   │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│           STEP 3: Fetch Fragment Contents                  │
-│         (HansardScraper.fetch_all_fragments)               │
+│           STEP 3: Fetch Fragment Contents                   │
+│         (HansardScraper.fetch_all_fragments)                │
 │                                                             │
 │  For each fragment UID:                                     │
-│    API: /daily/fragment/{uid}                              │
-│    Returns: XML with full debate text                      │
+│    API: /daily/fragment/{uid}                               │
+│    Returns: XML with full debate text                       │
 │                                                             │
-│  Process (XMLParser.parse_fragment_content):               │
-│  ├─ Extract bill/topic name                                │
-│  ├─ Parse paragraphs with class indicators                 │
-│  ├─ Identify sections, subsections, speakers               │
-│  └─ Build content map {path: text}                         │
+│  Process (XMLParser.parse_fragment_content):                │
+│  ├─ Extract bill/topic name                                 │
+│  ├─ Parse paragraphs with class indicators                  │
+│  ├─ Identify sections, subsections, speakers                │
+│  └─ Build content map {path: text}                          │
 │                                                             │
-│  Output: content_map Dict {content_key: full_text}         │
+│  Output: content_map Dict {content_key: full_text}          │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│         STEP 4: Merge Content with Tree Branches           │
-│        (ContentMerger.merge_content_to_branches)           │
+│         STEP 4: Merge Content with Tree Branches            │
+│        (ContentMerger.merge_content_to_branches)            │
 │                                                             │
 │  Process:                                                   │
-│  ├─ For each branch in tree structure                      │
-│  ├─ Match with content_map using:                          │
-│  │  ├─ Exact name match                                    │
-│  │  ├─ Path-based matching                                 │
-│  │  └─ Fuzzy matching                                      │
-│  └─ Assign matched text to branch                          │
+│  ├─ For each branch in tree structure                       │
+│  ├─ Match with content_map using:                           │
+│  │  ├─ Exact name match                                     │
+│  │  ├─ Path-based matching                                  │
+│  │  └─ Fuzzy matching                                       │
+│  └─ Assign matched text to branch                           │
 │                                                             │
-│  Output: Enhanced branches with text content               │
+│  Output: Enhanced branches with text content                │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              STEP 5: Build Full Text                       │
-│            (HansardScraper._build_full_text)               │
+│              STEP 5: Build Full Text                        │
+│            (HansardScraper._build_full_text)                │
 │                                                             │
-│  Combines all tree paths and content into                  │
-│  a single formatted text document                          │
+│  Combines all tree paths and content into                   │
+│  a single formatted text document                           │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              STEP 6: Save to JSON File                     │
-│           (HansardScraper._save_to_file)                   │
+│              STEP 6: Save to JSON File                      │
+│           (HansardScraper._save_to_file)                    │
 │                                                             │
-│  Output: hansard_scraped.json                              │
+│  Output: hansard_scraped.json                               │
 │  {                                                          │
-│    "url": "...",                                           │
-│    "doc_ids": [...],                                       │
-│    "tree_branches": [...],                                 │
-│    "full_text": "..."                                      │
+│    "url": "...",                                            │
+│    "doc_ids": [...],                                        │
+│    "tree_branches": [...],                                  │
+│    "full_text": "..."                                       │
 │  }                                                          │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -273,10 +270,9 @@ The script will scrape the default URL and save results to `hansard_scraped.json
 ### Class Structure
 
 ```
-hansard_refactored.py
+hansard.py
 │
-├── BrowserPreview
-│   └── open_url()              # Optional browser preview
+├── ColoredFormatter            # Custom logging formatter with colors
 │
 ├── DocumentIDExtractor
 │   └── extract_from_url()      # Regex-based ID extraction
@@ -334,7 +330,7 @@ hansard_refactored.py
 ### Example 1: Basic Scraping
 
 ```python
-from hansard_refactored import HansardScraper
+from hansard import HansardScraper
 
 scraper = HansardScraper()
 url = "https://www.parliament.nsw.gov.au/Hansard/..."
@@ -344,7 +340,7 @@ result = scraper.scrape(url, output_file="output.json")
 ### Example 2: Custom Timeout
 
 ```python
-from hansard_refactored import HansardScraper
+from hansard import HansardScraper
 
 # Set 60-second timeout for slow connections
 scraper = HansardScraper(timeout=60)
@@ -354,7 +350,7 @@ result = scraper.scrape(url)
 ### Example 3: Process Multiple URLs
 
 ```python
-from hansard_refactored import HansardScraper
+from hansard import HansardScraper
 
 urls = [
     "https://www.parliament.nsw.gov.au/...",
@@ -369,7 +365,7 @@ for i, url in enumerate(urls):
 ### Example 4: Extract Specific Content
 
 ```python
-from hansard_refactored import HansardScraper
+from hansard import HansardScraper
 
 scraper = HansardScraper()
 result = scraper.scrape(url)
@@ -381,14 +377,18 @@ for topic in topics:
     print(f"{topic['name']}: {len(topic['text'])} characters")
 ```
 
-### Example 5: Browser Preview (Optional)
+### Example 5: Interactive Input
 
 ```python
-from hansard_refactored import BrowserPreview
+from hansard import HansardScraper
 
-# Open URL in browser to verify content
-url = "https://www.parliament.nsw.gov.au/Hansard/..."
-BrowserPreview.open_url(url, headless=False)
+# Interactive usage (as in main function)
+scraper = HansardScraper()
+target_url = input("📝 Input target URL: ")
+result = scraper.scrape(target_url, "hansard_scraped.json")
+
+if result:
+    print("✅ Scraping successful!")
 ```
 
 ## 📄 Output Format
@@ -448,20 +448,23 @@ BrowserPreview.open_url(url, headless=False)
 ### Project Structure
 
 ```
-hansard-scraper/
-├── hansard_refactored.py    # Main refactored script
-├── hansard.py               # Original script (for reference)
-├── README.md                # This file
-├── README_ARCHITECTURE.md   # Additional architecture docs
-├── requirements.txt         # Python dependencies
-└── hansard_scraped.json     # Sample output
+No-Selenium/
+├── hansard.py                  # Main scraper script
+├── hansard_scraped.json        # Sample output
+├── README.md                   # This file (main documentation)
+├── README_ARCHITECTURE.md      # Additional architecture docs
+├── QUICK_START.md             # Quick start guide
+├── REFACTORING_SUMMARY.md     # Summary of code improvements
+├── COMPARISON.md              # Before/after comparison
+├── DISPLAY_IMPROVEMENTS.md    # Display enhancement details
+└── requirements.txt           # Python dependencies
 ```
 
 ### Running Tests
 
 ```bash
 # Run the scraper
-python hansard_refactored.py
+python hansard.py
 
 # Verify output
 cat hansard_scraped.json | jq '.tree_branches | length'
@@ -493,10 +496,13 @@ MIT License - Feel free to use and modify as needed.
 ## 🙏 Acknowledgments
 
 - NSW Parliament for providing the public API
-- BeautifulSoup and Requests libraries
-- Python community for excellent tools
+- BeautifulSoup and Requests libraries for excellent web scraping tools
+- Colorama library for beautiful colored console output
+- Python community for excellent development tools
 
 ## 📧 Contact
+
+**Author**: Yulius Kurniawan Wijaya
 
 For issues or questions, please open an issue on the repository.
 
