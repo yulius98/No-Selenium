@@ -87,8 +87,7 @@ Use Selenium only when:
 ### Step 1: Clone or Download
 
 ```bash
-git clone <repository-url>
-cd hansard-scraper
+git clone https://github.com/yulius98/No-Selenium.git
 ```
 
 ### Step 2: Install Dependencies
